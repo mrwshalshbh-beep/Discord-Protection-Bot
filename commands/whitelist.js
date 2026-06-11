@@ -1,146 +1,118 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, SelectMenuBuilder, StringSelectMenuBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const ServerSettings = require('../models/ServerSettings');
 const ProtectionManager = require('../utils/protection');
+const Logger = require('../utils/logger');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('whitelist')
-    .setDescription('إدارة قائمة التخطي والأشخاص الموثوقين')
-    .addSubcommand(sub =>
-      sub
-        .setName('add_user')
-        .setDescription('إضافة مستخدم موثوق')
-        .addUserOption(opt => opt.setName('user').setDescription('المستخدم').setRequired(true))
-        .addStringOption(opt =>
-          opt.setName('action')
-            .setDescription('الإجراء المسموح به')
-            .addChoices(
-              { name: '🎖️ إضافة رتب', value: 'role_assign' },
-              { name: '📝 تعديل رومات', value: 'channel_modify' },
-              { name: '🤖 إضافة بوتات', value: 'bot_add' },
-              { name: '🔗 إدارة ويب هوك', value: 'webhook_manage' },
-              { name: '🔒 تعديل صلاحيات', value: 'permission_change' },
-              { name: '⚙️ إعدادات السيرفر', value: 'server_settings' }
-            )
-            .setRequired(true)
-        )
-    )
-    .addSubcommand(sub =>
-      sub
-        .setName('remove_user')
-        .setDescription('إزالة مستخدم من الموثوقين')
-        .addUserOption(opt => opt.setName('user').setDescription('المستخدم').setRequired(true))
-    )
-    .addSubcommand(sub =>
-      sub
-        .setName('list')
-        .setDescription('عرض قائمة الأشخاص الموثوقين')
-    )
-    .addSubcommand(sub =>
-      sub
-        .setName('add_bot')
-        .setDescription('إضافة بوت للقائمة البيضاء')
-        .addStringOption(opt => opt.setName('bot_id').setDescription('معرف البوت').setRequired(true))
-    ),
+    .setDescription('🛡️ إدارة متقدمة للقائمة البيضاء والتخطي'),
   async execute(interaction) {
     try {
       const serverId = interaction.guildId;
       const settings = await ServerSettings.findOne({ serverId });
 
       if (!settings) {
-        return interaction.reply({ content: '⚠️ البوت غير مفعل! استخدم `/setup` أولاً', ephemeral: true });
+        const errorEmbed = new EmbedBuilder()
+          .setTitle('❌ خطأ')
+          .setDescription('البوت غير مفعل! استخدم `/setup` أولاً')
+          .setColor('#ff0000');
+        return interaction.reply({ embeds: [errorEmbed], ephemeral: true });
       }
 
-      const subcommand = interaction.options.getSubcommand();
-
-      if (subcommand === 'add_user') {
-        const user = interaction.options.getUser('user');
-        const action = interaction.options.getString('action');
-
-        await ProtectionManager.addToWhitelist(serverId, user.id, action);
-
-        const embed = new EmbedBuilder()
-          .setTitle('✅ تم إضافة المستخدم')
-          .setDescription(`${user.username} يمكنه الآن: **${action}**`)
-          .setColor('#00ff00')
-          .setThumbnail(user.avatarURL());
-
-        await interaction.reply({ embeds: [embed] });
-      }
-
-      if (subcommand === 'remove_user') {
-        const user = interaction.options.getUser('user');
-
-        await ServerSettings.findOneAndUpdate(
-          { serverId },
+      // القائمة الرئيسية
+      const mainMenu = new StringSelectMenuBuilder()
+        .setCustomId('whitelist_main_menu')
+        .setPlaceholder('اختر ما تريد إدارته...')
+        .addOptions(
           {
-            $pull: {
-              'trustedUsers': { userId: user.id }
-            }
+            label: '👥 إدارة الأشخاص الموثوقين',
+            value: 'manage_users',
+            emoji: '👤',
+            description: 'أضف أو أزل أشخاص موثوقين'
           },
-          { new: true }
+          {
+            label: '🤖 إدارة البوتات',
+            value: 'manage_bots',
+            emoji: '🤖',
+            description: 'تحكم في البوتات المسموح بها'
+          },
+          {
+            label: '🎖️ إدارة الرتب',
+            value: 'manage_roles',
+            emoji: '🎖️',
+            description: 'تخطي لإضافة رتب معينة'
+          },
+          {
+            label: '📝 إدارة الرومات',
+            value: 'manage_channels',
+            emoji: '📝',
+            description: 'تخطي لتعديل رومات معينة'
+          },
+          {
+            label: '🔗 إدارة الويب هوك',
+            value: 'manage_webhooks',
+            emoji: '🔗',
+            description: 'تخطي لإدارة الويب هوك'
+          },
+          {
+            label: '⚙️ إعدادات الحماية',
+            value: 'protection_settings',
+            emoji: '⚙️',
+            description: 'تفعيل/تعطيل الحماية'
+          }
         );
 
-        const embed = new EmbedBuilder()
-          .setTitle('✅ تم إزالة المستخدم')
-          .setDescription(`تم إزالة ${user.username} من قائمة الموثوقين`)
-          .setColor('#ff6b6b');
+      const mainRow = new ActionRowBuilder().addComponents(mainMenu);
 
-        await interaction.reply({ embeds: [embed] });
-      }
-
-      if (subcommand === 'list') {
-        const embed = new EmbedBuilder()
-          .setTitle('📋 قائمة الأشخاص الموثوقين')
-          .setColor('#0099ff')
-          .setThumbnail(interaction.guild.iconURL());
-
-        if (settings.trustedUsers.length === 0) {
-          embed.setDescription('❌ لا يوجد أشخاص موثوقين بعد');
-        } else {
-          settings.trustedUsers.forEach(user => {
-            const actionLabels = {
-              'role_assign': '🎖️ إضافة رتب',
-              'channel_modify': '📝 تعديل رومات',
-              'bot_add': '🤖 إضافة بوتات',
-              'webhook_manage': '🔗 إدارة ويب هوك',
-              'permission_change': '🔒 تعديل صلاحيات',
-              'server_settings': '⚙️ إعدادات السيرفر'
-            };
-
-            const permissions = user.permissions.map(p => actionLabels[p] || p).join('\n');
-            embed.addFields({
-              name: `👤 <@${user.userId}>`,
-              value: permissions || 'بدون صلاحيات',
-              inline: false
-            });
-          });
-        }
-
-        await interaction.reply({ embeds: [embed], ephemeral: true });
-      }
-
-      if (subcommand === 'add_bot') {
-        const botId = interaction.options.getString('bot_id');
-
-        await ServerSettings.findOneAndUpdate(
-          { serverId },
+      const mainEmbed = new EmbedBuilder()
+        .setTitle('🛡️ نظام إدارة الحماية والتخطي')
+        .setDescription('مرحباً! اختر من القائمة أدناه ما تريد إدارته')
+        .setColor('#0099ff')
+        .addFields(
           {
-            $addToSet: { botWhitelist: botId }
+            name: '👥 الأشخاص الموثوقين',
+            value: `${settings.trustedUsers.length} شخص`,
+            inline: true
           },
-          { new: true }
-        );
+          {
+            name: '🤖 البوتات المسموح بها',
+            value: `${settings.botWhitelist.length} بوت`,
+            inline: true
+          },
+          {
+            name: '🎖️ الرتب المتخطاة',
+            value: `${settings.roleWhitelist.length} رتبة`,
+            inline: true
+          },
+          {
+            name: '📝 الرومات المتخطاة',
+            value: `${settings.channelWhitelist.length} روم`,
+            inline: true
+          },
+          {
+            name: '🔗 الويب هوك المتخطاة',
+            value: `${settings.webhookWhitelist.length} ويب هوك`,
+            inline: true
+          },
+          {
+            name: '⚙️ حالة الحماية',
+            value: settings.punishmentSettings.enableAutoRestore ? '✅ مفعلة' : '❌ معطلة',
+            inline: true
+          }
+        )
+        .setFooter({ text: 'اختر من السلكت منيو أدناه' })
+        .setThumbnail(interaction.guild.iconURL());
 
-        const embed = new EmbedBuilder()
-          .setTitle('✅ تم إضافة البوت')
-          .setDescription(`معرف البوت: \`${botId}\` تمت إضافته للقائمة البيضاء`)
-          .setColor('#00ff00');
+      await interaction.reply({ embeds: [mainEmbed], components: [mainRow] });
 
-        await interaction.reply({ embeds: [embed] });
-      }
     } catch (error) {
       console.error('خطأ في أمر التخطي:', error);
-      await interaction.reply({ content: '❌ حدث خطأ!', ephemeral: true });
+      const errorEmbed = new EmbedBuilder()
+        .setTitle('❌ حدث خطأ')
+        .setDescription('حدث خطأ ما! حاول مرة أخرى')
+        .setColor('#ff0000');
+      await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
     }
   }
 };
